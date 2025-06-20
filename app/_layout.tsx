@@ -11,10 +11,13 @@ import {
 } from '@expo-google-fonts/inter';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { Platform } from 'react-native';
 
+// Prevent the splash screen from auto-hiding before asset loading is complete
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
+  // CRITICAL: This hook is required and must never be removed
   useFrameworkReady();
 
   const [fontsLoaded, fontError] = useFonts({

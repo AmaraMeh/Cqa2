@@ -23,45 +23,9 @@ import {
 } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { productService, Product } from '@/services/firebaseService';
-import { Timestamp } from 'firebase/firestore';
+import { productApiService } from '@/services/productApiService';
 
 const { width, height } = Dimensions.get('window');
-
-// Mock product database for barcode lookup
-const productDatabase: { [key: string]: Omit<Product, 'id' | 'userId' | 'createdAt' | 'updatedAt'> } = {
-  '3033710074617': {
-    name: 'Lait UHT Demi-écrémé',
-    brand: 'Candia',
-    category: 'Produits laitiers',
-    barcode: '3033710074617',
-    expiryDate: new Date('2024-03-15'),
-    quantity: 1,
-    location: 'Frigo - Étagère 2',
-    status: 'fresh',
-    nutritionalInfo: {
-      calories: 46,
-      protein: 3.2,
-      carbs: 4.8,
-      fat: 1.5,
-    }
-  },
-  '3017620422003': {
-    name: 'Yaourt Nature',
-    brand: 'Danone',
-    category: 'Produits laitiers',
-    barcode: '3017620422003',
-    expiryDate: new Date('2024-02-25'),
-    quantity: 4,
-    location: 'Frigo - Étagère 1',
-    status: 'warning',
-    nutritionalInfo: {
-      calories: 60,
-      protein: 4.5,
-      carbs: 6.0,
-      fat: 1.2,
-    }
-  }
-};
 
 export default function ScannerScreen() {
   const [facing, setFacing] = useState<CameraType>('back');
@@ -70,12 +34,16 @@ export default function ScannerScreen() {
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [scannedProduct, setScannedProduct] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
   const { user, userProfile } = useAuth();
 
   const triggerHaptic = () => {
     if (Platform.OS !== 'web') {
       // Haptics would be implemented here for mobile
       console.log('Haptic feedback triggered');
+    } else {
+      // Web alternative - could add visual feedback
+      console.log('Visual feedback for web');
     }
   };
 
@@ -113,49 +81,60 @@ export default function ScannerScreen() {
     triggerHaptic();
   };
 
-  const handleBarcodeScanned = ({ type, data }: { type: string; data: string }) => {
+  const handleBarcodeScanned = async ({ type, data }: { type: string; data: string }) => {
     if (scanned || !user) return;
     
     setScanned(true);
+    setLoading(true);
     triggerHaptic();
     
-    // Look up product in database
-    const foundProduct = productDatabase[data];
-    
-    if (foundProduct) {
-      setScannedProduct({
-        ...foundProduct,
-        barcode: data
-      });
-      setShowAddModal(true);
-    } else {
-      // Product not found in database
-      Alert.alert(
-        'Produit non reconnu',
-        `Code-barres: ${data}\n\nCe produit n'est pas dans notre base de données. Voulez-vous l'ajouter manuellement ?`,
-        [
-          {
-            text: 'Scanner à nouveau',
-            onPress: () => setScanned(false),
-          },
-          {
-            text: 'Ajouter manuellement',
-            onPress: () => {
-              setScannedProduct({
-                name: 'Produit inconnu',
-                brand: '',
-                category: '',
-                barcode: data,
-                expiryDate: new Date(),
-                quantity: 1,
-                location: '',
-                status: 'fresh'
-              });
-              setShowAddModal(true);
+    try {
+      // Try to get product data from API
+      const productData = await productApiService.getProductByBarcode(data);
+      
+      if (productData) {
+        setScannedProduct(productData);
+        setShowAddModal(true);
+      } else {
+        // Product not found in database
+        Alert.alert(
+          'Produit non reconnu',
+          `Code-barres: ${data}\n\nCe produit n'est pas dans notre base de données. Voulez-vous l'ajouter manuellement ?`,
+          [
+            {
+              text: 'Scanner à nouveau',
+              onPress: () => setScanned(false),
             },
-          },
-        ]
-      );
+            {
+              text: 'Ajouter manuellement',
+              onPress: () => {
+                setScannedProduct({
+                  name: 'Produit inconnu',
+                  brand: '',
+                  category: '',
+                  barcode: data,
+                  expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+                  quantity: 1,
+                  location: '',
+                  status: 'fresh',
+                  allergens: [],
+                  riskFactors: [],
+                  safetyScore: 3,
+                  nutritionGrade: 'C',
+                  ecoScore: 'C'
+                });
+                setShowAddModal(true);
+              },
+            },
+          ]
+        );
+      }
+    } catch (error) {
+      console.error('Error fetching product data:', error);
+      Alert.alert('Erreur', 'Impossible de récupérer les données du produit');
+      setScanned(false);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -167,13 +146,6 @@ export default function ScannerScreen() {
         ...scannedProduct,
         userId: user.uid,
       });
-
-      // Update user stats
-      if (userProfile) {
-        const newTotalScans = userProfile.totalScans + 1;
-        // Update user profile with new scan count
-        // This would be implemented in the auth context
-      }
 
       Alert.alert(
         'Produit ajouté',
@@ -228,6 +200,12 @@ export default function ScannerScreen() {
             <Text style={styles.instructionText}>
               Placez le code-barres dans le cadre
             </Text>
+            
+            {loading && (
+              <Text style={styles.loadingText}>
+                Recherche du produit...
+              </Text>
+            )}
           </View>
 
           <View style={styles.controls}>
@@ -290,6 +268,15 @@ export default function ScannerScreen() {
                 <Text style={styles.productBrand}>{scannedProduct.brand}</Text>
                 <Text style={styles.productCategory}>{scannedProduct.category}</Text>
                 <Text style={styles.productBarcode}>Code: {scannedProduct.barcode}</Text>
+                
+                {scannedProduct.allergens && scannedProduct.allergens.length > 0 && (
+                  <View style={styles.allergenWarning}>
+                    <Text style={styles.allergenTitle}>⚠️ Allergènes détectés:</Text>
+                    <Text style={styles.allergenList}>
+                      {scannedProduct.allergens.join(', ')}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               <View style={styles.modalActions}>
@@ -431,6 +418,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
+  loadingText: {
+    fontSize: 14,
+    fontFamily: 'Inter-Medium',
+    color: '#F59E0B',
+    marginTop: 16,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
   controls: {
     position: 'absolute',
     bottom: 30,
@@ -515,6 +513,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'Inter-Regular',
     color: '#9CA3AF',
+    marginBottom: 12,
+  },
+  allergenWarning: {
+    backgroundColor: '#FEF2F2',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#EF4444',
+  },
+  allergenTitle: {
+    fontSize: 14,
+    fontFamily: 'Inter-SemiBold',
+    color: '#DC2626',
+    marginBottom: 4,
+  },
+  allergenList: {
+    fontSize: 12,
+    fontFamily: 'Inter-Regular',
+    color: '#7F1D1D',
   },
   modalActions: {
     gap: 12,
